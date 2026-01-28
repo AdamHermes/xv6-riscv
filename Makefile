@@ -130,6 +130,7 @@ UPROGS=\
 	$U/_echo\
 	$U/_forktest\
 	$U/_grep\
+	$U/_hello\
 	$U/_init\
 	$U/_kill\
 	$U/_ln\
@@ -145,9 +146,10 @@ UPROGS=\
 	$U/_logstress\
 	$U/_forphan\
 	$U/_dorphan\
+	$U/_ps\
 
-fs.img: mkfs/mkfs README $(UPROGS)
-	mkfs/mkfs fs.img README $(UPROGS)
+fs.img: mkfs/mkfs README domains.txt $(UPROGS)
+	mkfs/mkfs fs.img README domains.txt $(UPROGS)
 
 -include kernel/*.d user/*.d
 
