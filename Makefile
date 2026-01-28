@@ -147,6 +147,7 @@ UPROGS=\
 	$U/_forphan\
 	$U/_dorphan\
 	$U/_ps\
+	$U/_trace\
 
 fs.img: mkfs/mkfs README domains.txt $(UPROGS)
 	mkfs/mkfs fs.img README domains.txt $(UPROGS)

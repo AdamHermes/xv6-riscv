@@ -4,13 +4,15 @@
 #include "user/user.h"
 
 char buf[512];
+
+// option flags (global so wc() can see them)
 int show_l = 0, show_w = 0, show_c = 0;
 
 void wc(int fd, char *name) {
   int i, n;
-  int l, w, c, inword;
-  l = w = c = 0;
-  inword = 0;
+  int l = 0, w = 0, c = 0;
+  int inword = 0;
+
   while ((n = read(fd, buf, sizeof(buf))) > 0) {
     for (i = 0; i < n; i++) {
       c++;
@@ -24,54 +26,64 @@ void wc(int fd, char *name) {
       }
     }
   }
+
   if (n < 0) {
     printf("wc: read error\n");
     exit(1);
   }
+
   if (show_l)
     printf("%d ", l);
   if (show_w)
     printf("%d ", w);
   if (show_c)
     printf("%d ", c);
-  printf("%s\n", name);
+
+  if (name[0] != 0)
+    printf("%s", name);
+
+  printf("\n");
 }
 
 int main(int argc, char *argv[]) {
-  int fd, i;
-  int file_index = 0;
+  int fd;
+  int i = 1;
 
-  if (argc <= 1) {
+  // parse options
+  while (i < argc && argv[i][0] == '-') {
+    if (strcmp(argv[i], "-l") == 0)
+      show_l = 1;
+    else if (strcmp(argv[i], "-w") == 0)
+      show_w = 1;
+    else if (strcmp(argv[i], "-c") == 0)
+      show_c = 1;
+    else {
+      printf("wc: unknown option %s\n", argv[i]);
+      continue;
+    }
+    i++;
+  }
+
+  // default: show all
+  if (!show_l && !show_w && !show_c) {
+    show_l = show_w = show_c = 1;
+  }
+
+  // stdin case
+  if (i == argc) {
     wc(0, "");
     exit(0);
   }
 
-  for (i = 1; i < argc; i++) {
-    if (argv[i][0] == '-') {
-      for (int j = 1; argv[i][j] != '\0'; j++) {
-        if (argv[i][j] == 'l') show_l = 1;
-        else if(argv[i][j] == 'w') show_w = 1;
-        else if(argv[i][j] == 'c') show_c = 1;
-      }
-    } else {
-      file_index = i; 
-      break; 
+  // files
+  for (; i < argc; i++) {
+    if ((fd = open(argv[i], O_RDONLY)) < 0) {
+      printf("wc: cannot open %s\n", argv[i]);
+      continue;
     }
+    wc(fd, argv[i]);
+    close(fd);
   }
-  if (!show_l && !show_w && !show_c) {
-    show_l = show_w = show_c = 1;
-  }
-  if (file_index == 0) {
-    wc(0, "");
-  } else {
-    for (i = file_index; i < argc; i++) {
-      if ((fd = open(argv[i], 0)) < 0) {
-        printf("wc: cannot open %s\n", argv[i]);
-        exit(1);
-      }
-      wc(fd, argv[i]);
-      close(fd);
-    }
-  }
+
   exit(0);
 }

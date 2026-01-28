@@ -102,3 +102,10 @@ uint64 sys_getprocs(void) {
   
   return getprocs(addr, max);
 }
+
+uint64 sys_trace(void) {
+  int mask;
+  argint(0, &mask);
+  myproc()->tracemask = mask;
+  return 0;
+}
