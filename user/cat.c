@@ -3,10 +3,10 @@
 #include "user/user.h"
 
 char buf[512];
-int show_n = 0;      // Flag đánh dấu có dùng -n hay không
-int line_number = 1; // Đếm số dòng
+int show_n = 0;      // -n flag
+int line_number = 1; // Line counting
 
-void print_padding_number(int num) {
+void formating(int num) {
   int temp = num;
   int digits = 0;
   
@@ -16,11 +16,11 @@ void print_padding_number(int num) {
     temp /= 10;
   }
 
-  // In các khoảng trắng phía trước để tổng phần số chiếm 6 ký tự
+  // Padding to follow the required format
   for (int i = 0; i < (6 - digits); i++) {
     printf(" ");
   }
-  printf("%d  ", num); // Số dòng và 2 dấu cách sau đó
+  printf("%d  ", num); // Line number and padding
 }
 
 int readline(int fd, char *buf, int maxlen);
@@ -29,11 +29,11 @@ void cat(int fd) {
   int n;
   if (show_n) {
     while ((n = readline(fd, buf, sizeof(buf))) > 0) {
-      print_padding_number(line_number++); // Gọi hàm căn lề
+      formating(line_number++);
       printf("%s", buf);
     }
   } else {
-    // Nếu không có -n, làm theo logic ban đầu: Gọi hết
+    // If no -n, we copy the file directly
     while ((n = read(fd, buf, sizeof(buf))) > 0) {
       if (write(1, buf, n) != n) {
         fprintf(2, "cat: write error\n");
@@ -72,19 +72,19 @@ int main(int argc, char *argv[]) {
   int fd, i;
   int arg_start = 1;
 
-  // Kiểm tra xem đối số đầu tiên có phải là -n không
+  // Check the first argument for -n flag
   if (argc > 1 && strcmp(argv[1], "-n") == 0) {
     show_n = 1;
-    arg_start = 2; // Bắt đầu đọc file từ đối số thứ 2
+    arg_start = 2; // Read file from second argument
   }
 
-  // Xử lý trường hợp đọc từ stdin (không có file)
+  // Stdin reading (case: from file)
   if (argc <= arg_start) {
     cat(0);
     exit(0);
   }
 
-  // Xử lý trường hợp input nhiều file
+  // Multi-file reading
   for (i = arg_start; i < argc; i++) {
     if ((fd = open(argv[i], O_RDONLY)) < 0) {
       fprintf(2, "cat: cannot open %s\n", argv[i]);
