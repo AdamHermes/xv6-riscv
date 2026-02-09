@@ -1,5 +1,7 @@
 #define SBRK_ERROR ((char *)-1)
 
+#include "kernel/getproc.h"
+
 struct stat;
 
 // system calls
@@ -24,6 +26,7 @@ int getpid(void);
 char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
+int getprocs(struct procinfo*, int);
 int trace(int);
 
 // ulib.c
