@@ -8,7 +8,9 @@ char buf[512];
 // option flags (global so wc() can see them)
 int show_l = 0, show_w = 0, show_c = 0;
 
-void wc(int fd, char *name) {
+void
+wc(int fd, char *name)
+{
   int i, n;
   int l = 0, w = 0, c = 0;
   int inword = 0;
@@ -45,7 +47,9 @@ void wc(int fd, char *name) {
   printf("\n");
 }
 
-int main(int argc, char *argv[]) {
+int
+main(int argc, char *argv[])
+{
   int fd;
   int i = 1;
 
