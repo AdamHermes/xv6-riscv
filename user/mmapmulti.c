@@ -20,13 +20,17 @@ main(int argc, char *argv[])
     printf("mmap allocation failed\n");
     exit(1);
   }
+
   printf("Mapped region 0 at 0x%lx\n", a0);
   printf("Mapped region 1 at 0x%lx\n", a1);
+  printf("Distinct shared regions: %s\n", a0 != a1 ? "yes" : "no");
 
   p0 = (int*)a0;
   p1 = (int*)a1;
   *p0 = 11;
   *p1 = 22;
+  printf("Parent wrote region 0: %d\n", *p0);
+  printf("Parent wrote region 1: %d\n", *p1);
 
   pid = fork();
   if (pid < 0) {
@@ -35,17 +39,39 @@ main(int argc, char *argv[])
   }
 
   if (pid == 0) {
-    printf("Child saw: %d %d\n", *p0, *p1);
+    printf("Child read region 0: %d\n", *p0);
+    printf("Child read region 1: %d\n", *p1);
     *p0 = 33;
     *p1 = 44;
-    munmap(a0);
-    munmap(a1);
+    printf("Child wrote region 0: %d\n", *p0);
+    printf("Child wrote region 1: %d\n", *p1);
+
+    if (munmap(a0) < 0)
+      printf("Child: munmap region 0 failed\n");
+    else
+      printf("Child: munmap region 0 succeeded\n");
+
+    if (munmap(a1) < 0)
+      printf("Child: munmap region 1 failed\n");
+    else
+      printf("Child: munmap region 1 succeeded\n");
+
     exit(0);
   }
 
   wait(0);
-  printf("Parent saw: %d %d\n", *p0, *p1);
-  munmap(a0);
-  munmap(a1);
+  printf("Parent read region 0 after child: %d\n", *p0);
+  printf("Parent read region 1 after child: %d\n", *p1);
+
+  if (munmap(a0) < 0)
+    printf("Parent: munmap region 0 failed\n");
+  else
+    printf("Parent: munmap region 0 succeeded\n");
+
+  if (munmap(a1) < 0)
+    printf("Parent: munmap region 1 failed\n");
+  else
+    printf("Parent: munmap region 1 succeeded\n");
+
   exit(0);
 }
