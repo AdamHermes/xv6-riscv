@@ -8,62 +8,164 @@
 #include "proc.h"
 #include "fs.h"
 
-#define SHMEM_REGION 0x4000000 // fixed address 64MB for shmem region
+struct shm_region {
+  int used;
+  uint64 pa;
+  int refcount;
+};
 
 struct {
-  uint64 pa;        // physical address of the shared memory page
-  int refcount;  // number of processes sharing this page
-  struct spinlock lock; // lock to protect refcount and allocated status
-  int allocated; // allocated status: yes or no?
-} shmem_page;
+  struct spinlock lock;
+  struct shm_region regions[MAX_SHM_REGIONS];
+} shmem_table;
+
+static int
+shm_find_proc_slot(struct proc *p, uint64 va)
+{
+  int i;
+
+  for (i = 0; i < MAX_SHM_REGIONS; i++) {
+    if (p->shmmap[i].used && p->shmmap[i].va == va)
+      return i;
+  }
+  return -1;
+}
+
+static int
+shm_find_free_proc_slot(struct proc *p)
+{
+  int i;
+
+  for (i = 0; i < MAX_SHM_REGIONS; i++) {
+    if (!p->shmmap[i].used)
+      return i;
+  }
+  return -1;
+}
+
+static uint64
+shm_find_free_va(struct proc *p)
+{
+  uint64 va;
+
+  for (va = SHM_REGION_BASE;
+       va < SHM_REGION_BASE + MAX_SHM_REGIONS * PGSIZE;
+       va += PGSIZE) {
+    pte_t *pte = walk(p->pagetable, va, 0);
+    if (shm_find_proc_slot(p, va) < 0 &&
+        (pte == 0 || (*pte & PTE_V) == 0))
+      return va;
+  }
+  return 0;
+}
+
+static int
+shm_alloc_region(void)
+{
+  int i;
+  void *pa;
+
+  acquire(&shmem_table.lock);
+  for (i = 0; i < MAX_SHM_REGIONS; i++) {
+    if (!shmem_table.regions[i].used)
+      break;
+  }
+  if (i == MAX_SHM_REGIONS) {
+    release(&shmem_table.lock);
+    return -1;
+  }
+
+  pa = kalloc();
+  if (pa == 0) {
+    release(&shmem_table.lock);
+    return -1;
+  }
+  memset(pa, 0, PGSIZE);
+
+  shmem_table.regions[i].used = 1;
+  shmem_table.regions[i].pa = (uint64)pa;
+  shmem_table.regions[i].refcount = 1;
+  release(&shmem_table.lock);
+
+  return i;
+}
+
+static void
+shm_put_region(int region_id)
+{
+  if (region_id < 0 || region_id >= MAX_SHM_REGIONS)
+    return;
+
+  acquire(&shmem_table.lock);
+  if (shmem_table.regions[region_id].used) {
+    if (shmem_table.regions[region_id].refcount > 0)
+      shmem_table.regions[region_id].refcount--;
+    if (shmem_table.regions[region_id].refcount == 0) {
+      kfree((void*)shmem_table.regions[region_id].pa);
+      shmem_table.regions[region_id].used = 0;
+      shmem_table.regions[region_id].pa = 0;
+      shmem_table.regions[region_id].refcount = 0;
+    }
+  }
+  release(&shmem_table.lock);
+}
 
 void init_shmem(void) {
-  initlock(&shmem_page.lock, "shmem");
-  shmem_page.allocated = 0;
-  shmem_page.refcount  = 0;
-  shmem_page.pa        = 0;
+  initlock(&shmem_table.lock, "shmem");
+  memset(shmem_table.regions, 0, sizeof(shmem_table.regions));
 }
 
 uint64 mmap(void) {
-    struct proc *p = myproc();
-    acquire(&shmem_page.lock);  // acquire lock to protect shared memory page allocation and refcount update
-    // check double-mapping
-    pte_t *pte = walk(p->pagetable, SHMEM_REGION, 0);
-    if (pte && (*pte & PTE_V)) {
-        release(&shmem_page.lock);
-        return SHMEM_REGION;
-    }
-    if (!shmem_page.allocated) {
-        void *pa = kalloc();
-        if (!pa) { release(&shmem_page.lock); return 0; }
-        memset(pa, 0, PGSIZE);
-        shmem_page.pa        = (uint64)pa;
-        shmem_page.allocated = 1;
-        shmem_page.refcount  = 0;
-    }
-    shmem_page.refcount++;
-    release(&shmem_page.lock);
-    if (mappages(p->pagetable, SHMEM_REGION, PGSIZE,
-                 shmem_page.pa, PTE_R | PTE_W | PTE_U) < 0) {
-        acquire(&shmem_page.lock);
-        shmem_page.refcount--;
-        if (shmem_page.refcount == 0) {
-            kfree((void*)shmem_page.pa);
-            shmem_page.allocated = 0;
-        }
-        release(&shmem_page.lock);
-        return 0;
-    }
-    return SHMEM_REGION;
+  struct proc *p = myproc();
+  int slot, region_id;
+  uint64 va, pa;
+
+  slot = shm_find_free_proc_slot(p);
+  if (slot < 0)
+    return 0;
+
+  va = shm_find_free_va(p);
+  if (va == 0)
+    return 0;
+
+  region_id = shm_alloc_region();
+  if (region_id < 0)
+    return 0;
+
+  acquire(&shmem_table.lock);
+  pa = shmem_table.regions[region_id].pa;
+  release(&shmem_table.lock);
+
+  if (mappages(p->pagetable, va, PGSIZE, pa, PTE_R | PTE_W | PTE_U) < 0) {
+    shm_put_region(region_id);
+    return 0;
+  }
+
+  p->shmmap[slot].used = 1;
+  p->shmmap[slot].va = va;
+  p->shmmap[slot].region_id = region_id;
+  return va;
 }
 
 int munmap(uint64 va) {
-    if (va != SHMEM_REGION) return -1;
-    struct proc *p = myproc();
-    pte_t *pte = walk(p->pagetable, va, 0);
-    if (!pte || !(*pte & PTE_V)) return -1;
-    uvmunmap(p->pagetable, va, 1, 0);
-    return 0;
+  struct proc *p = myproc();
+  int slot;
+  pte_t *pte;
+
+  slot = shm_find_proc_slot(p, va);
+  if (slot < 0)
+    return -1;
+
+  pte = walk(p->pagetable, va, 0);
+  if (pte == 0 || (*pte & PTE_V) == 0)
+    return -1;
+
+  uvmunmap(p->pagetable, va, 1, 0);
+  shm_put_region(p->shmmap[slot].region_id);
+  p->shmmap[slot].used = 0;
+  p->shmmap[slot].va = 0;
+  p->shmmap[slot].region_id = -1;
+  return 0;
 }
 
 /*
@@ -243,21 +345,6 @@ void uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free) {
       continue;   
     if ((*pte & PTE_V) == 0)  // has physical page been allocated?
       continue;
-    if (a == SHMEM_REGION) {
-      uint64 pa = PTE2PA(*pte);
-    if (pa == shmem_page.pa) {
-        acquire(&shmem_page.lock);
-        shmem_page.refcount--;
-        if (shmem_page.refcount == 0) {
-            kfree((void*)shmem_page.pa);
-            shmem_page.pa = 0;
-            shmem_page.allocated = 0;
-        }
-        release(&shmem_page.lock);
-        *pte = 0;
-        continue;
-      }
-    }
     if (do_free) {
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
@@ -347,8 +434,6 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz) {
   char *mem;
 
   for (i = 0; i < sz; i += PGSIZE) {
-    if (i == SHMEM_REGION)
-        continue;
     if ((pte = walk(old, i, 0)) == 0)
         continue;
     if ((*pte & PTE_V) == 0)
@@ -363,22 +448,72 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz) {
         goto err;
     }
   }
-  if (shmem_page.allocated) {
-    pte_t *spte = walk(old, SHMEM_REGION, 0);
-    if (spte && (*spte & PTE_V)) {
-      if (mappages(new, SHMEM_REGION, PGSIZE, shmem_page.pa, PTE_R|PTE_W|PTE_U) != 0) {
-        uvmunmap(new, 0, sz / PGSIZE, 1);
-        return -1;
-      }
-      acquire(&shmem_page.lock);
-      shmem_page.refcount++;
-      release(&shmem_page.lock);
-    }
-  }
   return 0;
  err:
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
+}
+
+int
+shm_fork(struct proc *parent, struct proc *child)
+{
+  int i, slot;
+
+  for (i = 0; i < MAX_SHM_REGIONS; i++) {
+    uint64 pa;
+    int region_id;
+
+    if (!parent->shmmap[i].used)
+      continue;
+
+    slot = shm_find_free_proc_slot(child);
+    if (slot < 0)
+      goto err;
+
+    region_id = parent->shmmap[i].region_id;
+    acquire(&shmem_table.lock);
+    if (region_id < 0 || region_id >= MAX_SHM_REGIONS ||
+        !shmem_table.regions[region_id].used) {
+      release(&shmem_table.lock);
+      goto err;
+    }
+    shmem_table.regions[region_id].refcount++;
+    pa = shmem_table.regions[region_id].pa;
+    release(&shmem_table.lock);
+
+    if (mappages(child->pagetable, parent->shmmap[i].va, PGSIZE, pa,
+                 PTE_R | PTE_W | PTE_U) < 0) {
+      shm_put_region(region_id);
+      goto err;
+    }
+
+    child->shmmap[slot].used = 1;
+    child->shmmap[slot].va = parent->shmmap[i].va;
+    child->shmmap[slot].region_id = region_id;
+  }
+
+  return 0;
+
+ err:
+  shm_release_proc(child, child->pagetable);
+  return -1;
+}
+
+void
+shm_release_proc(struct proc *p, pagetable_t pagetable)
+{
+  int i;
+
+  for (i = 0; i < MAX_SHM_REGIONS; i++) {
+    if (!p->shmmap[i].used)
+      continue;
+    if (pagetable)
+      uvmunmap(pagetable, p->shmmap[i].va, 1, 0);
+    shm_put_region(p->shmmap[i].region_id);
+    p->shmmap[i].used = 0;
+    p->shmmap[i].va = 0;
+    p->shmmap[i].region_id = -1;
+  }
 }
 
 // mark a PTE invalid for user access.

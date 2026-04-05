@@ -111,6 +111,7 @@ static struct proc* allocproc(void) {
 found:
   p->pid = allocpid();
   p->state = USED;
+  memset(p->shmmap, 0, sizeof(p->shmmap));
 
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
@@ -143,8 +144,10 @@ static void freeproc(struct proc *p) {
   if (p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
-  if (p->pagetable)
+  if (p->pagetable) {
+    shm_release_proc(p, p->pagetable);
     proc_freepagetable(p->pagetable, p->sz);
+  }
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -218,7 +221,7 @@ int growproc(int n) {
 
   sz = p->sz;
   if (n > 0) {
-    if (sz + n > TRAPFRAME) {
+    if (sz + n >= SHM_REGION_BASE) {
       return -1;
     }
     if ((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
@@ -245,6 +248,11 @@ int kfork(void) {
 
   // Copy user memory from parent to child.
   if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+  if (shm_fork(p, np) < 0) {
     freeproc(np);
     release(&np->lock);
     return -1;
